@@ -130,7 +130,10 @@ mkdir -p "$RELEASE_DIR"
 tar -xzf "$ARCHIVE_PATH" -C "$RELEASE_DIR"
 
 cd "$RELEASE_DIR"
-npm ci --omit=dev
+
+# Build native addons against the target host to avoid glibc mismatches
+# from prebuilt binaries downloaded on newer CI environments.
+npm_config_build_from_source=true npm ci --omit=dev
 
 cat > "$ENV_FILE" <<EOF
 HOST=$APP_HOST
