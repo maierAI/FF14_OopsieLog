@@ -20,30 +20,111 @@ DATA_DIR="$SHARED_DIR/data"
 ENV_FILE="$SHARED_DIR/app.env"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 DB_PATH="$DATA_DIR/data.db"
+NODE_MAJOR_EXPECTED="${NODE_VERSION%%.*}"
 
 load_node_runtime() {
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+    if [ "$NODE_MAJOR" = "$NODE_MAJOR_EXPECTED" ]; then
+      NODE_BIN="$(command -v node)"
+      return 0
+    fi
+  fi
+
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   if [ -s "$NVM_DIR/nvm.sh" ]; then
     # shellcheck source=/dev/null
     . "$NVM_DIR/nvm.sh"
-    nvm use "$NODE_VERSION" >/dev/null
+    if nvm use "$NODE_VERSION" >/dev/null 2>&1; then
+      NODE_BIN="$(command -v node)"
+      return 0
+    fi
   fi
+
+  if [ -x "$SHARED_DIR/node/bin/node" ] && [ -x "$SHARED_DIR/node/bin/npm" ]; then
+    export PATH="$SHARED_DIR/node/bin:$PATH"
+    NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+    if [ "$NODE_MAJOR" = "$NODE_MAJOR_EXPECTED" ]; then
+      NODE_BIN="$(command -v node)"
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
-load_node_runtime
+install_node_runtime() {
+  case "$(uname -m)" in
+    x86_64 | amd64)
+      NODE_PLATFORM="x64"
+      ;;
+    aarch64 | arm64)
+      NODE_PLATFORM="arm64"
+      ;;
+    *)
+      echo "Unsupported CPU architecture for Node.js binary install: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
 
-if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-  echo "Node.js and npm are required on the remote host. Install Node ${NODE_VERSION} or configure nvm for the deploy user." >&2
-  exit 1
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required to install a local Node.js runtime." >&2
+    exit 1
+  fi
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to resolve the latest Node.js ${NODE_MAJOR_EXPECTED} release." >&2
+    exit 1
+  fi
+
+  mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$LOG_DIR" "$DATA_DIR"
+  NODE_DIST_VERSION="$(python3 - "$NODE_MAJOR_EXPECTED" "$NODE_PLATFORM" <<'PY'
+import json
+import sys
+import urllib.request
+
+major = sys.argv[1]
+platform = sys.argv[2]
+file_id = f"linux-{platform}"
+
+with urllib.request.urlopen("https://nodejs.org/dist/index.json", timeout=30) as response:
+    releases = json.load(response)
+
+for release in releases:
+    version = release.get("version", "")
+    if version.startswith(f"v{major}.") and file_id in release.get("files", []):
+        print(version)
+        break
+else:
+    raise SystemExit(f"Unable to find a Node.js {major} release for {file_id}.")
+PY
+)"
+
+  NODE_URL="https://nodejs.org/dist/$NODE_DIST_VERSION/node-$NODE_DIST_VERSION-linux-$NODE_PLATFORM.tar.xz"
+  NODE_TMP_DIR="$(mktemp -d)"
+  NODE_INSTALL_DIR="$SHARED_DIR/node-$NODE_DIST_VERSION"
+  trap 'rm -rf "$NODE_TMP_DIR"' RETURN
+
+  curl -fsSL "$NODE_URL" -o "$NODE_TMP_DIR/node.tar.xz"
+  tar -xJf "$NODE_TMP_DIR/node.tar.xz" -C "$NODE_TMP_DIR"
+  rm -rf "$NODE_INSTALL_DIR"
+  mv "$NODE_TMP_DIR/node-$NODE_DIST_VERSION-linux-$NODE_PLATFORM" "$NODE_INSTALL_DIR"
+  ln -sfn "$NODE_INSTALL_DIR" "$SHARED_DIR/node"
+  export PATH="$SHARED_DIR/node/bin:$PATH"
+  NODE_BIN="$(command -v node)"
+}
+
+mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$LOG_DIR" "$DATA_DIR"
+if ! load_node_runtime; then
+  install_node_runtime
 fi
 
 NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
-if [ "$NODE_MAJOR" != "${NODE_VERSION%%.*}" ]; then
-  echo "Expected Node major ${NODE_VERSION%%.*}, but found $(node -v)." >&2
+if [ "$NODE_MAJOR" != "$NODE_MAJOR_EXPECTED" ]; then
+  echo "Expected Node major $NODE_MAJOR_EXPECTED, but found $(node -v)." >&2
   exit 1
 fi
 
-mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$LOG_DIR" "$DATA_DIR"
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 tar -xzf "$ARCHIVE_PATH" -C "$RELEASE_DIR"
@@ -57,8 +138,6 @@ PORT=$APP_PORT
 DB_PATH=$DB_PATH
 NODE_ENV=production
 EOF
-
-NODE_BIN="$(command -v node)"
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
