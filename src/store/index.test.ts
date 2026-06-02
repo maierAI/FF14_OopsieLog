@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { useAppStore } from './index';
 
 describe('App Store Player State Machine', () => {
+  const originalRandomUUID = globalThis.crypto.randomUUID;
+
   beforeEach(() => {
     // Reset store before each test
     useAppStore.setState({
@@ -9,6 +11,13 @@ describe('App Store Player State Machine', () => {
       teams: [],
       mistakes: [],
       activeTeamId: ''
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis.crypto, 'randomUUID', {
+      value: originalRandomUUID,
+      configurable: true,
     });
   });
 
@@ -87,5 +96,19 @@ describe('App Store Player State Machine', () => {
     const mistakeAfter = useAppStore.getState().mistakes[0];
     expect(mistakeAfter.playerId).not.toBe(playerId);
     expect(mistakeAfter.playerId).toMatch(/^删除玩家_[A-Z0-9]{4}$/);
+  });
+
+  it('should still create records when randomUUID is unavailable', () => {
+    Object.defineProperty(globalThis.crypto, 'randomUUID', {
+      value: undefined,
+      configurable: true,
+    });
+
+    const store = useAppStore.getState();
+    store.addTeam({ name: 'Fallback Team', bossId: 'boss-1', players: [] });
+
+    const createdTeam = useAppStore.getState().teams[0];
+    expect(createdTeam.name).toBe('Fallback Team');
+    expect(createdTeam.id).toMatch(/^[a-z0-9-]+$/i);
   });
 });
