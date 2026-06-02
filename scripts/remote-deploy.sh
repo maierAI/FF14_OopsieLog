@@ -170,10 +170,33 @@ if [ "$HEALTH_HOST" = "0.0.0.0" ] || [ "$HEALTH_HOST" = "::" ]; then
   HEALTH_HOST="127.0.0.1"
 fi
 
-if command -v curl >/dev/null 2>&1; then
-  curl --fail --silent --show-error "http://$HEALTH_HOST:$APP_PORT/api/health" >/dev/null
-else
-  "$NODE_BIN" -e "fetch('http://$HEALTH_HOST:$APP_PORT/api/health').then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
-fi
+health_check() {
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --silent --show-error "http://$HEALTH_HOST:$APP_PORT/api/health" >/dev/null
+  else
+    "$NODE_BIN" -e "fetch('http://$HEALTH_HOST:$APP_PORT/api/health').then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  fi
+}
+
+HEALTH_TIMEOUT_SECONDS=30
+HEALTH_ATTEMPT_INTERVAL=2
+HEALTH_DEADLINE=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+
+until health_check; do
+  if [ "$SECONDS" -ge "$HEALTH_DEADLINE" ]; then
+    echo "Health check failed for http://$HEALTH_HOST:$APP_PORT/api/health after ${HEALTH_TIMEOUT_SECONDS}s" >&2
+    systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,40p' >&2 || true
+    if [ -f "$LOG_DIR/app-error.log" ]; then
+      echo "--- app-error.log ---" >&2
+      tail -n 80 "$LOG_DIR/app-error.log" >&2 || true
+    fi
+    if [ -f "$LOG_DIR/app.log" ]; then
+      echo "--- app.log ---" >&2
+      tail -n 40 "$LOG_DIR/app.log" >&2 || true
+    fi
+    exit 1
+  fi
+  sleep "$HEALTH_ATTEMPT_INTERVAL"
+done
 
 echo "Deployment completed: $RELEASE_DIR"
