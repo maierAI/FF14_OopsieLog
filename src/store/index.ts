@@ -2,14 +2,16 @@ import { create } from 'zustand';
 import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import { getWorkspaceScopedStorageKey, getWorkspaceSession } from '../utils/session';
 import { fetchJson } from '../utils/http';
+import { resolveRemoteStorageValue } from './persistence';
 
 const apiStorage: StateStorage = {
   getItem: async (name: string): Promise<string | null> => {
     const session = getWorkspaceSession();
     const scopedKey = getWorkspaceScopedStorageKey(name);
+    const fallbackValue = localStorage.getItem(scopedKey);
 
     if (!session) {
-      return localStorage.getItem(scopedKey);
+      return fallbackValue;
     }
 
     try {
@@ -19,24 +21,28 @@ const apiStorage: StateStorage = {
         actorPasscode: session.passcode
       });
       const data = await fetchJson<{ value: unknown }>('/api/store?' + params.toString());
-      return data.value ? JSON.stringify(data.value) : null;
+      return resolveRemoteStorageValue(data.value, fallbackValue);
     } catch (e) {
       console.error('API Fetch error:', e);
     }
-    return localStorage.getItem(scopedKey);
+    return fallbackValue;
   },
   setItem: async (name: string, value: string): Promise<void> => {
     const session = getWorkspaceSession();
     const scopedKey = getWorkspaceScopedStorageKey(name);
 
     localStorage.setItem(scopedKey, value); // Fallback local write
+    if (!session) {
+      return;
+    }
+
     try {
       await fetchJson<{ success: boolean }>('/api/store', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          workspaceId: session?.workspaceId,
-          actorPasscode: session?.passcode,
+          workspaceId: session.workspaceId,
+          actorPasscode: session.passcode,
           key: scopedKey,
           value: JSON.parse(value)
         })
@@ -340,12 +346,12 @@ export const useAppStore = create<AppState>()(
 
       // --- Teams & Players ---
       addTeam: (team) => set((state) => {
-        const newTeam = { 
+        const newTeam = {
+          ...team,
           id: genId(),
-          dayResetTime: '04:00',
-          errorLevels: ['团灭'],
-          celebrationMode: false,
-          ...team, 
+          dayResetTime: team.dayResetTime ?? '04:00',
+          errorLevels: team.errorLevels ?? ['团灭'],
+          celebrationMode: team.celebrationMode ?? false,
         };
         return {
           teams: [...state.teams, newTeam],

@@ -111,4 +111,29 @@ describe('App Store Player State Machine', () => {
     expect(createdTeam.name).toBe('Fallback Team');
     expect(createdTeam.id).toMatch(/^[a-z0-9-]+$/i);
   });
+
+  it('should always generate a fresh id for copied teams', () => {
+    const store = useAppStore.getState();
+    store.addTeam({
+      name: 'Original Team',
+      bossId: 'boss-1',
+      players: [],
+      dayResetTime: '06:00',
+      errorLevels: ['团灭', '机制错'],
+      celebrationMode: true,
+      celebrationAllowance: 2
+    });
+
+    const originalTeam = useAppStore.getState().teams[0];
+    const copiedTeam = { ...originalTeam, name: 'Original Team Copy' } as unknown as Parameters<typeof store.addTeam>[0];
+    store.addTeam(copiedTeam);
+
+    const teams = useAppStore.getState().teams;
+    expect(teams).toHaveLength(2);
+    expect(teams[1].id).not.toBe(originalTeam.id);
+    expect(teams[1].dayResetTime).toBe('06:00');
+    expect(teams[1].errorLevels).toEqual(['团灭', '机制错']);
+    expect(teams[1].celebrationMode).toBe(true);
+    expect(teams[1].celebrationAllowance).toBe(2);
+  });
 });
